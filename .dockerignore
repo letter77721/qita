@@ -9,6 +9,8 @@
 !mobile/LiveCamera.web.js
 !mobile/MathText.js
 !mobile/MathText.web.js
+!mobile/formulaParts.js
+!mobile/copy-math-fonts.cjs
 !mobile/index.js
 !mobile/app.json
 !agents/

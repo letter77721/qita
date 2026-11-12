@@ -9,10 +9,10 @@ router=APIRouter(prefix='/api/demo')
 COURSE={'id':'fluid','name':'流体力学 · 公开示例','exam_date':None}
 PAGES=[
     {'document_id':'demo-notes','name':'课堂笔记（合成示例）.txt','kind':'课堂笔记','number':1,
-     'text':'【合成示例，用于演示，非真实课堂记录】\n伯努利方程：沿流线应用。\n雷诺数：Re=rho*v*L/mu，L 为特征长度。\n牛顿黏性定律：牛顿流体剪应力与速度梯度成正比。',
+     'text':'【合成示例，用于演示，非真实课堂记录】\n伯努利方程：沿流线应用。\n雷诺数：$Re=\\frac{\\rho v L}{\\mu}$，L 为特征长度。\n牛顿黏性定律：牛顿流体剪应力与速度梯度成正比。',
      'status':'extracted','course_id':'fluid'},
     {'document_id':'demo-slides','name':'课程课件（合成示例）.txt','kind':'课程课件','number':1,
-     'text':'【合成示例，用于演示，非真实课程课件】\n伯努利方程：稳态、不可压、无黏条件下沿流线应用。\n雷诺数：Re=rho*v*L/mu，管流常取管道内径为特征长度。\n牛顿黏性定律：牛顿流体剪应力与速度梯度成正比。',
+     'text':'【合成示例，用于演示，非真实课程课件】\n伯努利方程：稳态、不可压、无黏条件下沿流线应用。\n雷诺数：$Re=\\frac{\\rho v L}{\\mu}$，管流常取管道内径为特征长度。\n牛顿黏性定律：牛顿流体剪应力与速度梯度成正比。',
      'status':'extracted','course_id':'fluid'}]
 for p in PAGES: p['original']=p['text']
 

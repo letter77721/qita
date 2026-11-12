@@ -6,6 +6,8 @@ RUN pnpm install --frozen-lockfile
 COPY mobile/App.js mobile/index.js mobile/app.json ./
 COPY mobile/LiveCamera.js mobile/LiveCamera.web.js ./
 COPY mobile/MathText.js mobile/MathText.web.js ./
+COPY mobile/formulaParts.js ./
+COPY mobile/copy-math-fonts.cjs ./
 ENV EXPO_NO_TELEMETRY=1 CI=1
 RUN pnpm build:web
 
