@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "NotePilot", "slug": "notepilot", "version": "2.0.0", "orientation": "portrait",
+    "userInterfaceStyle": "light", "scheme": "notepilot", "newArchEnabled": true,
+    "ios": {"supportsTablet": true, "bundleIdentifier": "com.notepilot.learning"},
+    "android": {"package": "com.notepilot.learning"},
+    "web": {"bundler": "metro", "output": "single", "name": "NotePilot · 今天，继续进步"},
+    "plugins": [["expo-camera", {"cameraPermission": "允许 NotePilot 拍摄课堂笔记，用于提取与核实学习资料", "recordAudioAndroid": false}]]
+  }
+}

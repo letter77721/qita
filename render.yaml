@@ -1,0 +1,17 @@
+# Free HTTPS validation deployment. Local files are ephemeral; no paid resources.
+services:
+  - type: web
+    name: notepilot
+    runtime: docker
+    plan: free
+    numInstances: 1
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: NOTEPILOT_ENV
+        value: production
+      - key: NOTEPILOT_DATA_DIR
+        value: /app/data
+      - key: NOTEPILOT_TOKEN
+        generateValue: true
