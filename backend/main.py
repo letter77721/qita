@@ -24,7 +24,7 @@ from agents.parser_agent import parse
 from agents.knowledge_agent import organize
 from agents.conflict_agent import LABELS
 from workflows.graph import run
-from services.ocr_service import configured, recognize
+from services.ocr_service import configured, recognize, VisionError, settings as vision_settings
 from services.retrieval import search
 
 load_dotenv(ROOT / '.env')
@@ -143,6 +143,8 @@ def process(job_id,doc_id,ocr):
         execute("UPDATE jobs SET stage='知识关联与证据诊断' WHERE id=?",(job_id,))
         run(course_pages(doc['course_id']))
         execute("UPDATE jobs SET status='completed',stage='处理完成' WHERE id=?",(job_id,))
+    except VisionError as e:
+        execute("UPDATE jobs SET status='failed',stage='视觉识别失败',error=? WHERE id=?",(str(e),job_id))
     except Exception:
         execute("UPDATE jobs SET status='failed',stage='处理失败',error='解析或模型调用失败，请检查文件与后端配置后重试。' WHERE id=?",(job_id,))
 
@@ -159,6 +161,12 @@ def enqueue(doc_id,ocr):
 
 @app.get('/api/health')
 def health(): return {'status':'ok','version':'2.0'}
+
+
+@app.get('/api/vision/status',dependencies=[Depends(auth)])
+def vision_status():
+    base,model=vision_settings()
+    return {'configured':configured(),'model':model,'base_url':base,'scope':'图片与扫描页转录；知识诊断和追问仍使用现有规则'}
 
 
 class Course(BaseModel):
