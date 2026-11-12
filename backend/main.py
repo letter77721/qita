@@ -298,5 +298,8 @@ def delete_document(id:str):
     return {'ok':True}
 
 
+from backend.demo import router as demo_router
+app.include_router(demo_router)
+
 web=ROOT/'mobile/dist'
 if web.exists(): app.mount('/',StaticFiles(directory=web,html=True),name='mobile-web')

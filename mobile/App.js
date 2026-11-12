@@ -27,10 +27,38 @@ function Workspace(){
  const [courseName,setCourseName]=useState(''),[exam,setExam]=useState(''),[filter,setFilter]=useState('全部'),[allowOcr,setAllowOcr]=useState(false);
  const [permission,requestPermission]=useCameraPermissions(),[cameraOpen,setCameraOpen]=useState(false),[cameraReady,setCameraReady]=useState(false),[shot,setShot]=useState(null),[crop,setCrop]=useState(0),[cropSaved,setCropSaved]=useState(false);
  const camera=useRef(null); const {width}=useWindowDimensions(); const wide=width>860;
+ const demoSession=useRef({attempts:[],reviews:{}});
+ const isDemo=!token.trim();
  async function request(path,opts={}){
-  const res=await fetch(api.replace(/\/$/,'')+'/api'+path,{...opts,headers:{...(opts.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(token?{Authorization:'Bearer '+token}:{}),...opts.headers}});
+  if(isDemo && opts.method && opts.method!=='GET'){
+   if(path==='/coach/feedback'){
+    const body=JSON.parse(opts.body);demoSession.current.attempts.push(body);
+    return {message:'已记录本次演示自评（仅当前页面会话保存）。'};
+   }
+   if(path.startsWith('/issues/')&&path.endsWith('/review')){
+    demoSession.current.reviews[path.split('/')[2]]=JSON.parse(opts.body);return {ok:true};
+   }
+   throw new Error('公开演示资料为只读。上传、修改或删除自己的资料，请在「我的」填写个人空间口令。');
+  }
+  if(isDemo && path==='/export') return {demo:true,...demoSession.current};
+  if(isDemo && path.startsWith('/coach?')){
+   const encoded=path.match(/[?&]concept=([^&]*)/);const concept=encoded&&decodeURIComponent(encoded[1])||'伯努利方程';
+   const history=demoSession.current.attempts.filter(a=>a.concept===concept);
+   if(history.length>=2&&history.slice(-2).every(a=>a.rating==='remembered'))path+='&depth=2';
+  }
+  const res=await fetch(api.replace(/\/$/,'')+'/api'+(isDemo?'/demo':'')+path,{...opts,headers:{...(opts.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(token?{Authorization:'Bearer '+token}:{}),...opts.headers}});
   let data; try{data=await res.json();}catch{throw new Error('服务没有返回有效数据，请检查后端地址');}
-  if(!res.ok)throw new Error(typeof data.detail==='string'?data.detail:'请求失败，请核对输入'); return data;
+  if(!res.ok)throw new Error(typeof data.detail==='string'?data.detail:'请求失败，请核对输入');
+  if(isDemo&&path.startsWith('/workspace')){
+   data.attempt_count=demoSession.current.attempts.length;
+   data.issues=data.issues.map(i=>({...i,review:demoSession.current.reviews[i.id]||null}));
+   data.tasks=data.tasks.map(t=>{const a=demoSession.current.attempts.filter(a=>a.concept===t.concept).slice(-5);const score=a.length?a.filter(a=>a.rating==='remembered').length/a.length:null;
+    const gap=data.issues.some(i=>i.concept===t.concept&&!i.review);
+    const days=!gap&&a.length&&a[a.length-1].rating==='remembered'?(a.length>=3&&score>=.8?3:1):0;
+    const due=new Date();due.setDate(due.getDate()+days);
+    return {...t,count:a.length,score,due:due.toLocaleDateString('en-CA',{timeZone:'Asia/Shanghai'}),reason:gap?'示例条件待核实':a.length?(days?'基于演示自评安排间隔复习':'最近仍需巩固，优先复习'):'示例主动回忆'};});
+  }
+  return data;
  }
  async function act(fn){setBusy(true);setError('');try{await fn();}catch(e){setError(e.message||'连接失败，请检查后端地址与网络');}finally{setBusy(false);}}
  async function refresh(){const data=await request('/workspace?course_id='+course);setWs(data);}
@@ -39,6 +67,7 @@ function Workspace(){
  async function openPage(id,number=1){setDetail(null);setModal('page');setPageNum(number);setActiveDoc(id);const p=await request(`/documents/${id}/pages/${number}`);setDetail(p);setEdit(p.text);}
  async function startCoach(concept=''){const q=await request(`/coach?course_id=${course}&concept=${encodeURIComponent(concept)}`);setCoach(q);setReveal(false);setAnswer('');setFeedback('');setTab('AI学习');setModal(null);}
  async function uploadAsset(asset){
+  if(isDemo)throw new Error('访客可体验相机预览和裁剪；云端上传与视觉识别需进入个人空间，示例不会冒充识别结果。');
   const form=new FormData();
   if(Platform.OS==='web'){const blob=await (await fetch(asset.uri)).blob();form.append('file',blob,asset.name||'课堂笔记.jpg');}
   else form.append('file',{uri:asset.uri,name:asset.name||'课堂笔记.jpg',type:asset.mimeType||'image/jpeg'});
@@ -55,6 +84,7 @@ function Workspace(){
  <View style={[s.shell,wide&&{maxWidth:1180}]}>
   <View style={s.top}><View style={s.row}><View style={s.logo}><Icon name="navigate" color={C.deep} size={21}/></View><Text style={s.brand}>NotePilot<Text style={{color:C.deep}}> .</Text></Text></View><Pressable onPress={()=>setTab('我的')} accessibilityLabel="打开设置"><View style={s.avatar}><Text style={{fontWeight:'700',color:C.deep}}>N</Text></View></Pressable></View>
   <ScrollView contentContainerStyle={[s.content,wide&&{paddingHorizontal:46}]} keyboardShouldPersistTaps="handled">
+   {isDemo&&<Card style={{backgroundColor:C.green}}><Text style={s.h2}>访客演示 · 无需登录</Text><Text style={s.small}>资料为明确标注的合成示例。直接体验「开始今日学习」或「知识漏洞雷达」；回答、自评和复核仅在当前页面会话保存。相机可预览和裁剪，云端识别需进入个人空间。</Text></Card>}
    {!!error&&<Card style={{backgroundColor:'#FBE8E0'}}><Text accessibilityRole="alert" style={s.body}>{error}</Text><Button title="重新连接" secondary onPress={()=>act(refresh)}/></Card>}
    {!!notice&&<Pressable onPress={()=>setNotice('')} style={s.toast}><Text style={{color:C.deep}}>{notice}　×</Text></Pressable>}
    {busy&&<ActivityIndicator color={C.deep} style={{marginBottom:12}}/>}
