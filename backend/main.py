@@ -5,13 +5,15 @@ import json
 import os
 import threading
 import uuid
+import hmac
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Header
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Header, Cookie, Response, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,9 +48,17 @@ def initialize():
         c.execute("UPDATE jobs SET status='failed',error='服务重启使任务中断，请重试',stage='任务中断' WHERE status IN ('queued','running')")
 
 
-def auth(authorization: str = Header(default='')):
+def valid_session(value):
+    try:
+        expires,signature=value.split('.')
+        expected=hmac.new(os.environ['NOTEPILOT_TOKEN'].encode(),expires.encode(),hashlib.sha256).hexdigest()
+        return int(expires)>time.time() and hmac.compare_digest(expected,signature)
+    except (ValueError,KeyError,AttributeError,TypeError): return False
+
+
+def auth(authorization: str = Header(default=''),np_session: str = Cookie(default='')):
     token = os.getenv('NOTEPILOT_TOKEN','')
-    if token and authorization != 'Bearer '+token:
+    if token and not hmac.compare_digest(authorization.encode(),('Bearer '+token).encode()) and not valid_session(np_session):
         raise HTTPException(401,'访问口令不正确')
 
 
@@ -61,7 +71,34 @@ async def lifespan(app):
 
 
 app = FastAPI(title='NotePilot 2.0',lifespan=lifespan)
-app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:8081','http://127.0.0.1:8081'],allow_methods=['*'],allow_headers=['*'])
+app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:8081','http://127.0.0.1:8081'],allow_methods=['*'],allow_headers=['*'],allow_credentials=True)
+
+
+class Login(BaseModel):
+    token:str=Field(min_length=1,max_length=1000)
+
+
+@app.post('/api/auth/login')
+def login(body:Login,response:Response,request:Request):
+    secret=os.getenv('NOTEPILOT_TOKEN','')
+    if not secret or not hmac.compare_digest(body.token.encode(),secret.encode()): raise HTTPException(401,'登录口令不正确')
+    expires=str(int(time.time())+86400)
+    signature=hmac.new(secret.encode(),expires.encode(),hashlib.sha256).hexdigest()
+    response.set_cookie('np_session',expires+'.'+signature,max_age=86400,httponly=True,
+                        secure=request.url.scheme=='https' or os.getenv('NOTEPILOT_ENV')=='production',samesite='strict',path='/')
+    response.headers['Cache-Control']='no-store'
+    return {'signed_in':True}
+
+
+@app.get('/api/auth/session')
+def session(np_session:str=Cookie(default='')):
+    return {'signed_in':valid_session(np_session)}
+
+
+@app.post('/api/auth/logout')
+def logout(response:Response):
+    response.delete_cookie('np_session',path='/',samesite='strict')
+    return {'signed_in':False}
 
 
 def execute(sql,args=()):

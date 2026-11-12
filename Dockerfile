@@ -4,6 +4,7 @@ RUN npm install --global pnpm@11.25.0
 COPY mobile/package.json mobile/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY mobile/App.js mobile/index.js mobile/app.json ./
+COPY mobile/LiveCamera.js mobile/LiveCamera.web.js ./
 ENV EXPO_NO_TELEMETRY=1 CI=1
 RUN pnpm build:web
 

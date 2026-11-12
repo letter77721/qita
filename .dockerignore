@@ -5,6 +5,8 @@
 !mobile/package.json
 !mobile/pnpm-lock.yaml
 !mobile/App.js
+!mobile/LiveCamera.js
+!mobile/LiveCamera.web.js
 !mobile/index.js
 !mobile/app.json
 !agents/
