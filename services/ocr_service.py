@@ -28,10 +28,12 @@ def prepare(data):
     from PIL import Image, ImageOps
     with Image.open(BytesIO(data)) as im:
         image=ImageOps.exif_transpose(im).convert('RGB')
-        image.thumbnail((4000,4000))
+        image.thumbnail((5000,5000))
+        out=BytesIO();image.save(out,format='PNG',optimize=True)
+        if out.tell()<5*1024*1024: return out.getvalue(),'image/png'
         for quality in (95,85,75):
             out=BytesIO(); image.save(out,format='JPEG',quality=quality)
-            if out.tell()<5*1024*1024: return out.getvalue()
+            if out.tell()<5*1024*1024: return out.getvalue(),'image/jpeg'
     raise VisionError('图片仍过大，请裁剪或缩小后再识别。')
 
 
@@ -41,10 +43,10 @@ def recognize(data, mime):
     base,model=settings()
     is_glm=urlparse(base).hostname=='open.bigmodel.cn'
     if is_glm:
-        data=prepare(data); mime='image/jpeg'
+        data,mime=prepare(data)
     payload = {'model': model, 'temperature': 0.1,'max_tokens':8192,'stream':False,
         'messages': [{'role': 'user', 'content': [
-            {'type': 'text', 'text': '仅转录图中的文字、公式和标题，保留条件和符号。公式用 LaTeX。无法辨认处写 [不确定]，不要补全或推断内容。'},
+            {'type': 'text', 'text': '你是严谨的理工科笔记转录员。只转录图片中实际可见的标题、文字、公式与适用条件，不解题、不补全标准答案。保留原有换行，每个知识点与其公式、条件放在同一段。数学公式严格用 LaTeX：行内用 $...$，独立公式用 $$...$$；分数用 \\frac{分子}{分母}，上下标用 _{...} 和 ^{...}，根号用 \\sqrt{...}。逐个核对分数线范围、括号、正负号、导数、积分、矢量、上下标和单位。区分希腊字母与拉丁字母，例如 rho/ρ、mu/μ、nu/ν、v、p，不凭常识替换原图符号；原图为希腊字母时输出相应 LaTeX 命令。不能辨认的局部写 [不确定] 并保留周围可读内容，禁止猜测。不输出 Markdown 代码围栏或推理过程。'},
             {'type': 'image_url', 'image_url': {'url': f'data:{mime};base64,' + base64.b64encode(data).decode()}}
         ]}]}
     if is_glm:

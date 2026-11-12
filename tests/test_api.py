@@ -70,3 +70,14 @@ def test_upload_uses_persistent_disk(client,tmp_path,monkeypatch):
     assert path.parent==disk/'uploads' and path.exists()
     assert client.delete('/api/documents/'+id).status_code==200
     assert not path.exists()
+
+def test_merge_preserves_pages_and_feedback(client):
+    id=upload(client,'雷诺数 Re=ρvL/μ')
+    course=client.post('/api/courses',json={'name':'流体力学目标'}).json()['id']
+    api.execute("INSERT INTO practice(course_id,concept,correct,answer) VALUES('fluid','雷诺数',1,'test')")
+    result=client.post('/api/courses/fluid/merge',json={'target_id':course})
+    assert result.status_code==200
+    ws=client.get('/api/workspace',params={'course_id':course}).json()
+    assert ws['documents'][0]['id']==id and ws['attempt_count']==1
+    assert len(ws['courses'])==1
+    assert client.get(f'/api/documents/{id}/pages/1').status_code==200

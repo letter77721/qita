@@ -209,6 +209,7 @@ def workspace(course_id:str='fluid'):
     courses=store.rows('SELECT * FROM courses ORDER BY rowid')
     course=next((c for c in courses if c['id']==course_id),None)
     if not course: raise HTTPException(404,'课程不存在')
+    jobs=store.rows('SELECT j.* FROM jobs j JOIN documents d ON d.id=j.document_id WHERE d.course_id=? ORDER BY j.created DESC LIMIT 15',(course_id,))
     pages=course_pages(course_id); state=run(pages)
     reviews={r['issue_id']:r for r in store.rows('SELECT * FROM reviews')}
     issues=[{**i,'label':LABELS[i['issue_type']],'source_a':clean(i['source_a']),'source_b':clean(i['source_b']),'review':reviews.get(i['id'])} for i in state['issues']]
@@ -216,7 +217,7 @@ def workspace(course_id:str='fluid'):
     for d in docs: d['page_count']=sum(p['document_id']==d['id'] for p in pages)
     return {'courses':courses,'course':course,'documents':docs,'issues':issues,
             'concepts':sorted({c['concept'] for c in state['chunks']}),'tasks':schedule(course,state['chunks'],issues),
-            'jobs':store.rows('SELECT j.* FROM jobs j JOIN documents d ON d.id=j.document_id WHERE d.course_id=? ORDER BY j.created DESC LIMIT 15',(course_id,)),
+            'jobs':jobs,
             'attempt_count':len(store.rows('SELECT id FROM practice WHERE course_id=?',(course_id,))),
             'vision_configured':configured(),'engine':state['engine']}
 
@@ -243,6 +244,24 @@ async def upload(file:UploadFile=File(...),course_id:str=Form('fluid'),kind:str=
 
 class Retry(BaseModel):
     allow_ocr:bool=False
+
+
+class MergeCourse(BaseModel):
+    target_id:str
+
+
+@app.post('/api/courses/{id}/merge',dependencies=[Depends(auth)])
+def merge_course(id:str,body:MergeCourse):
+    if id==body.target_id: raise HTTPException(400,'不能合并到同一课程')
+    with lock,store.connect() as c:
+        if not c.execute('SELECT 1 FROM courses WHERE id=?',(id,)).fetchone() or not c.execute('SELECT 1 FROM courses WHERE id=?',(body.target_id,)).fetchone():
+            raise HTTPException(404,'课程不存在')
+        if c.execute("SELECT 1 FROM jobs j JOIN documents d ON d.id=j.document_id WHERE d.course_id=? AND j.status IN ('queued','running')",(id,)).fetchone():
+            raise HTTPException(409,'请等待该课程处理完成再合并')
+        c.execute('UPDATE documents SET course_id=? WHERE course_id=?',(body.target_id,id))
+        c.execute('UPDATE practice SET course_id=? WHERE course_id=?',(body.target_id,id))
+        c.execute('DELETE FROM courses WHERE id=?',(id,))
+    return {'ok':True,'course_id':body.target_id}
 
 
 @app.post('/api/documents/{id}/process',dependencies=[Depends(auth)])

@@ -18,7 +18,7 @@ def test_glm_payload_and_transcription(monkeypatch):
         body=json.loads(req.data)
         assert req.full_url==vision.GLM_BASE+'/chat/completions'
         assert body['model']=='glm-4.6v-flash' and body['thinking']['type']=='disabled'
-        assert body['messages'][0]['content'][1]['image_url']['url'].startswith('data:image/jpeg;base64,')
+        assert body['messages'][0]['content'][1]['image_url']['url'].startswith('data:image/png;base64,')
         return BytesIO(json.dumps({'choices':[{'message':{'content':'雷诺数 Re=ρvL/μ'},'finish_reason':'stop'}]}).encode())
     monkeypatch.setattr(vision.urllib.request,'urlopen',fake)
     assert vision.recognize(image(),'image/png')=='雷诺数 Re=ρvL/μ'
