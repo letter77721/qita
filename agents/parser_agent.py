@@ -4,7 +4,9 @@ from pathlib import Path
 def parse(data, filename):
     suffix = Path(filename).suffix.lower()
     if suffix in ('.txt', '.md'):
-        return [{'number':1, 'text':data.decode('utf-8-sig'), 'status':'extracted'}]
+        try:text=data.decode('utf-8-sig')
+        except UnicodeDecodeError:text=data.decode('gb18030')
+        return [{'number':1, 'text':text, 'status':'extracted'}]
     if suffix == '.pdf':
         import fitz
         with fitz.open(stream=data, filetype='pdf') as doc:

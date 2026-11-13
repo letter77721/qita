@@ -68,6 +68,10 @@ def dashboard(course_id:str='fluid'):
     answers=s.rows('SELECT a.* FROM lite_answers a JOIN lite_goals g ON g.id=a.goal_id WHERE g.course_id=? ORDER BY a.created,a.rowid',(course_id,))
     tasks=sorted([schedule(g,[a for a in answers if a['goal_id']==g['id']],course['exam_date']) for g in goals],key=lambda g:(g['due'],g['concept']))
     documents=[{**{k:v for k,v in d.items() if k!='path'},'page_count':sum(p['document_id']==d['id'] for p in s.pages())} for d in s.documents() if d['course_id']==course_id]
+    for d in documents:
+        d['readable_pages']=sum(p['document_id']==d['id'] and bool(p['text'].strip()) and p['status'] in ('verified','extracted') for p in s.pages())
+        jobs=s.rows('SELECT status,error FROM jobs WHERE document_id=? ORDER BY created DESC,rowid DESC LIMIT 1',(d['id'],))
+        d.update(jobs[0] if jobs else {'status':'completed','error':None})
     return {'courses':s.rows('SELECT * FROM courses'),'course':course,'tasks':tasks,'history':[{**a,'evaluation':json.loads(a['evaluation']),'trace':json.loads(a['trace'])} for a in answers[-30:][::-1]],
             'mistakes':s.rows('SELECT * FROM lite_mistakes WHERE course_id=? ORDER BY created DESC',(course_id,)),
             'model':llm.configuration(),'attempt_count':len(answers),'documents':documents}

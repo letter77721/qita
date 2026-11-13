@@ -129,3 +129,40 @@ def test_binary_grading_independent_of_missing_source(monkeypatch,verdict):
 def test_evaluation_rejects_non_binary_verdict(verdict):
     with pytest.raises(ValueError):
         llm.Evaluation(verdict=verdict,error_type='none',explanation='解析',follow_up='追问',evidence='',needs_verification=True)
+
+def test_material_status_and_selected_goal_after_upload(client):
+    import time
+    u=client.post('/api/documents',files={'file':('chapter.txt','课程文字资料'.encode('gb18030'),'text/plain')}).json()
+    for _ in range(100):
+        status=client.get('/api/documents/'+u['document_id']+'/status').json()
+        if status['status'] in ('completed','failed'):break
+        time.sleep(.02)
+    assert status['status']=='completed'
+    doc=next(d for d in client.get('/api/lite/dashboard').json()['documents'] if d['id']==u['document_id'])
+    assert doc['readable_pages']==1 and doc['status']=='completed'
+    g=client.post('/api/lite/goals',json={'concept':'课程','target':'理解','document_id':doc['id']})
+    assert g.status_code==200
+    assert client.get('/api/documents/'+doc['id']+'/pages/1').json()['text']=='课程文字资料'
+
+def test_failed_upload_visible_without_pages(client):
+    import time
+    u=client.post('/api/documents',files={'file':('broken.pdf',b'not a pdf','application/pdf')}).json()
+    for _ in range(100):
+        status=client.get('/api/documents/'+u['document_id']+'/status').json()
+        if status['status'] in ('completed','failed'):break
+        time.sleep(.02)
+    assert status['status']=='failed' and '文字提取失败' in status['error']
+    doc=next(d for d in client.get('/api/lite/dashboard').json()['documents'] if d['id']==u['document_id'])
+    assert doc['page_count']==0 and doc['readable_pages']==0 and doc['status']=='failed'
+
+def test_course_rename_and_delete_preserves_learning(client):
+    c=client.post('/api/courses',json={'name':'课程二'}).json()['id']
+    assert client.put('/api/courses/'+c,json={'name':'新课程名'}).status_code==200
+    assert next(x for x in client.get('/api/courses').json() if x['id']==c)['name']=='新课程名'
+    g=client.post('/api/lite/goals',json={'course_id':c,'concept':'知识点','target':'理解'}).json()['id']
+    m=client.post('/api/lite/mistakes',json={'course_id':c,'concept':'知识点','question':'题目'}).json()['id']
+    assert client.post('/api/courses/'+c+'/merge',json={'target_id':'fluid'}).status_code==200
+    d=client.get('/api/lite/dashboard').json()
+    assert any(x['id']==g for x in d['tasks']) and any(x['id']==m for x in d['mistakes'])
+    assert not any(x['id']==c for x in client.get('/api/courses').json())
+    assert client.post('/api/courses/fluid/merge',json={'target_id':'fluid'}).status_code==400

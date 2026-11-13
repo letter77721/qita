@@ -142,10 +142,10 @@ def process(job_id,doc_id):
             # Retry never overwrites existing human corrections.
             c.executemany('INSERT OR IGNORE INTO pages VALUES(?,?,?,?,?)',[(doc_id,p['number'],p['text'],p['text'],p['status']) for p in parsed])
         execute("UPDATE jobs SET stage='知识关联与证据诊断' WHERE id=?",(job_id,))
-        run(course_pages(doc['course_id']))
         execute("UPDATE jobs SET status='completed',stage='处理完成' WHERE id=?",(job_id,))
-    except Exception:
-        execute("UPDATE jobs SET status='failed',stage='处理失败',error='解析或模型调用失败，请检查文件与后端配置后重试。' WHERE id=?",(job_id,))
+    except Exception as e:
+        message=str(e) if isinstance(e,ValueError) and str(e).startswith(('请先解除','单个 PDF')) else '文件文字提取失败，请检查文件是否损坏，或换用文字版 PDF / UTF-8 文本后重试。'
+        execute("UPDATE jobs SET status='failed',stage='处理失败',error=? WHERE id=?",(message,job_id))
 
 
 def enqueue(doc_id):
@@ -165,6 +165,10 @@ def health(): return {'status':'ok','version':'lite-1.0'}
 class Course(BaseModel):
     name: str = Field(min_length=1,max_length=60)
     exam_date: date | None = None
+
+
+@app.get('/api/courses',dependencies=[Depends(auth)])
+def list_courses():return store.rows('SELECT * FROM courses ORDER BY rowid')
 
 
 @app.post('/api/courses',dependencies=[Depends(auth)])
@@ -253,6 +257,8 @@ def merge_course(id:str,body:MergeCourse):
             raise HTTPException(409,'请等待该课程处理完成再合并')
         c.execute('UPDATE documents SET course_id=? WHERE course_id=?',(body.target_id,id))
         c.execute('UPDATE practice SET course_id=? WHERE course_id=?',(body.target_id,id))
+        c.execute('UPDATE lite_goals SET course_id=? WHERE course_id=?',(body.target_id,id))
+        c.execute('UPDATE lite_mistakes SET course_id=? WHERE course_id=?',(body.target_id,id))
         c.execute('DELETE FROM courses WHERE id=?',(id,))
     return {'ok':True,'course_id':body.target_id}
 
@@ -262,6 +268,12 @@ def retry(id:str):
     if not store.rows('SELECT id FROM documents WHERE id=?',(id,)): raise HTTPException(404,'资料不存在')
     return {'job_id':enqueue(id)}
 
+
+@app.get('/api/documents/{id}/status',dependencies=[Depends(auth)])
+def document_status(id:str):
+    if not store.rows('SELECT id FROM documents WHERE id=?',(id,)):raise HTTPException(404,'资料不存在')
+    jobs=store.rows('SELECT status,error FROM jobs WHERE document_id=? ORDER BY created DESC,rowid DESC LIMIT 1',(id,))
+    return jobs[0] if jobs else {'status':'completed','error':None}
 
 @app.get('/api/documents/{id}/pages/{number}',dependencies=[Depends(auth)])
 def page_detail(id:str,number:int):
