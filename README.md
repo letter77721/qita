@@ -6,7 +6,7 @@
 
 ## 学习闭环
 
-新建目标并粘贴教材文字 → Planner 按到期日推荐 → GLM Tutor 出题/提示 → 用户作答 → GLM Evaluator 结构化错因与追问 → Scheduler 更新任务 → 可保存、编辑、删除错题。
+新建目标并粘贴教材文字 → Planner 按到期日推荐 → 文本模型 Tutor 出题/提示 → 用户作答 → 文本模型 Evaluator 结构化错因与追问 → Scheduler 更新任务 → 可保存、编辑、删除错题。
 
 模型结果通过严格 Pydantic JSON Schema 校验。引用必须逐字来自资料；无依据、不确定或引用不匹配，不计为正确样本。最近五次有效回答估计近期表现，连续正确三次才延长间隔，不宣称一次答对即完全掌握。旧问题保存资料快照；重复提交同一题不会增加练习次数。
 
@@ -41,3 +41,15 @@ Render 的 Dockerfile 构建同一前端与 API，健康检查 `/api/health`。�
 测试、构建、真实模型调用与手机真机交互是不同层次；没有真实设备测试时，不宣称真机通过。详细范围见 docs/Lite重构计划.md。其余旧 docs 为历史版本记录。
 
 匿名入口为 /api/open/*，不提供管理员模型检查或认证接口。模型调用每网络每小时30次、全站每日200次（单进程计数，重启重置）；资料每空间20份、总计40 MB。请允许 Cookie、及时导出，免费部署仍不能保证跨发布持久化。
+
+## 切换 DeepSeek
+
+在 Render → Environment 添加以下配置并保存部署，原有 TEXT_* 不必删除；DEEPSEEK_API_KEY 存在时优先使用该配置：
+
+```
+DEEPSEEK_API_KEY=仅在 Render 填写新密钥
+DEEPSEEK_URL=https://api.deepseek.com/v1/chat/completions
+DEEPSEEK_MODEL=deepseek-flash
+```
+
+DeepSeek 官方 API 按量计费；不自动切换供应商。当前官方模型名称见 https://api-docs.deepseek.com/ ，旧 deepseek-chat 已停用。保持 JSON Schema 校验、证据核对和失败不记学习记录；不把旧智谱密钥发给 DeepSeek。密钥不写入源码或前端。删除 DEEPSEEK_API_KEY 可回退原 TEXT_* 配置。
