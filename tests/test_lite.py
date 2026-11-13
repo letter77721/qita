@@ -52,7 +52,7 @@ def test_structured_evidence_guard(monkeypatch):
     payload={'verdict':'correct','error_type':'none','explanation':'正确','follow_up':'继续？','evidence':'编造原文','needs_verification':False}
     monkeypatch.setattr(llm.urllib.request,'urlopen',lambda *a,**k:BytesIO(json.dumps({'choices':[{'message':{'content':json.dumps(payload)}}]}).encode()))
     result=llm.generate(llm.Evaluation,'test',{'source':'真实原文'})
-    assert result.verdict=='uncertain' and result.needs_verification
+    assert result.verdict=='correct' and result.error_type=='none' and result.needs_verification
     payload['unexpected']='extra'
     with pytest.raises(llm.ModelError):llm.generate(llm.Evaluation,'test',{'source':'真实原文'})
 
@@ -113,3 +113,19 @@ def test_choice_and_short_answer_round_trip(client,monkeypatch):
 def test_question_rejects_invalid_options(kind,options):
     with pytest.raises(ValueError):
         llm.Question(question='问题',hint='提示',reference='答案',evidence='',needs_verification=True,question_type=kind,options=options)
+
+@pytest.mark.parametrize('verdict',['correct','incorrect'])
+def test_binary_grading_independent_of_missing_source(monkeypatch,verdict):
+    from io import BytesIO
+    monkeypatch.setenv('TEXT_API_KEY','fake')
+    payload={'verdict':verdict,'error_type':'none' if verdict=='correct' else 'condition','explanation':'按参考答案评价','follow_up':'为什么？','evidence':'','needs_verification':False}
+    monkeypatch.setattr(llm.urllib.request,'urlopen',lambda *a,**k:BytesIO(json.dumps({'choices':[{'message':{'content':json.dumps(payload)}}]}).encode()))
+    result=llm.generate(llm.Evaluation,'评价',{'source':'','reference':'无黏','answer':'无黏' if verdict=='correct' else '有黏'})
+    assert result.verdict==verdict and result.needs_verification
+    # Missing textbook evidence still cannot be counted as confirmed mastery.
+    assert schedule({'id':'g'},[{'created':'2026-11-13 00:00:00','evaluation':result.model_dump_json()}])['certain_samples']==0
+
+@pytest.mark.parametrize('verdict',['uncertain','partial'])
+def test_evaluation_rejects_non_binary_verdict(verdict):
+    with pytest.raises(ValueError):
+        llm.Evaluation(verdict=verdict,error_type='none',explanation='解析',follow_up='追问',evidence='',needs_verification=True)

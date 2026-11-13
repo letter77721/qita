@@ -115,7 +115,7 @@ def answer(id:str,body:Answer):
     if payload.get('question_type')=='single_choice':
         allowed=[chr(65+i)+'. '+o for i,o in enumerate(payload['options'])]
         if body.answer not in allowed:raise HTTPException(400,'请选择题目提供的一个选项')
-    result=model(llm.Evaluation,'Evaluator：核对回答，解释错因并给出一个有针对性的追问。资料不足时标记 uncertain。',{'question':payload['question'],'options':payload.get('options',[]),'reference':payload['reference'],'answer':body.answer,'source':payload['source']})
+    result=model(llm.Evaluation,'Evaluator：按本题参考答案与教材核对回答，只判正确 correct 或错误 incorrect，解释原因并给出一个有针对性的追问。教材证据不足单独标记 needs_verification，不改变答题对错。',{'question':payload['question'],'options':payload.get('options',[]),'reference':payload['reference'],'answer':body.answer,'source':payload['source']})
     trace=json.loads(q['trace'])+[{'agent':'Evaluator','model':llm.configuration()['model'],'status':'validated_json'},{'agent':'Scheduler','rule':'最近5次；不确定不计正确率；连续正确3次才延长间隔'}]
     aid=uuid.uuid4().hex
     with main().store.connect() as c:
