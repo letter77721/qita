@@ -55,3 +55,32 @@ def test_structured_evidence_guard(monkeypatch):
     assert result.verdict=='uncertain' and result.needs_verification
     payload['unexpected']='extra'
     with pytest.raises(llm.ModelError):llm.generate(llm.Evaluation,'test',{'source':'真实原文'})
+
+def test_goal_reads_selected_document_and_preserves_snapshot(client,monkeypatch):
+    api.store.add('material','教材.txt','课件','material.txt',[{'number':1,'text':'稳态、不可压、无黏','status':'extracted'}])
+    g=client.post('/api/lite/goals',json={'concept':'伯努利','target':'掌握公式与适用条件','document_id':'material'}).json()['id']
+    assert api.store.rows('SELECT source FROM lite_goals WHERE id=?',(g,))[0]['source']=='稳态、不可压、无黏'
+    api.execute('UPDATE pages SET text=? WHERE document_id=?',('已更改','material'))
+    def fake(schema,task,context):
+        assert context['source']=='稳态、不可压、无黏'
+        return llm.Question(question='条件？',hint='想想密度',reference='不可压',evidence='不可压',needs_verification=False)
+    monkeypatch.setattr(llm,'generate',fake)
+    assert client.post('/api/lite/questions',json={'goal_id':g}).status_code==200
+
+def test_goal_rejects_other_course_material_and_unreadable_scan(client):
+    api.store.add('other','另一课程.txt','课件','other.txt',[{'number':1,'text':'其他资料','status':'extracted'}])
+    api.execute('UPDATE documents SET course_id=? WHERE id=?',('other-course','other'))
+    payload={'concept':'伯努利','target':'理解基本概念','document_id':'other'}
+    assert client.post('/api/lite/goals',json=payload).status_code==404
+    api.store.add('scan','扫描.pdf','课件','scan.pdf',[{'number':1,'text':'','status':'needs_review'}])
+    payload['document_id']='scan'
+    assert client.post('/api/lite/goals',json=payload).status_code==400
+    assert not api.store.rows('SELECT * FROM lite_goals')
+
+def test_goal_without_material_reuses_current_course_text(client,monkeypatch):
+    g=client.post('/api/lite/goals',json={'concept':'知识点','target':'理解基本概念'}).json()['id']
+    def fake(schema,task,context):
+        assert context['source']=='old data'
+        return llm.Question(question='问题？',hint='提示',reference='old data',evidence='old data',needs_verification=False)
+    monkeypatch.setattr(llm,'generate',fake)
+    assert client.post('/api/lite/questions',json={'goal_id':g}).status_code==200

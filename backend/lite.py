@@ -35,6 +35,7 @@ class Goal(BaseModel):
     concept:str=Field(min_length=1,max_length=100)
     target:str=Field(min_length=1,max_length=1000)
     source:str=Field(default='',max_length=15000)
+    document_id:str=Field(default='',max_length=100)
 class Practice(BaseModel):
     goal_id:str=''
     course_id:str='fluid'
@@ -73,7 +74,13 @@ def dashboard(course_id:str='fluid'):
 @router.post('/goals')
 def add_goal(body:Goal):
     if not main().store.rows('SELECT id FROM courses WHERE id=?',(body.course_id,)):raise HTTPException(404,'课程不存在')
-    id=uuid.uuid4().hex;main().execute('INSERT INTO lite_goals VALUES(?,?,?,?,?)',(id,body.course_id,body.concept,body.target,body.source));return {'id':id}
+    source=body.source
+    if body.document_id:
+        if not main().store.rows('SELECT id FROM documents WHERE id=? AND course_id=?',(body.document_id,body.course_id)):
+            raise HTTPException(404,'该课程中没有这份资料')
+        source='\n'.join(p['text'] for p in main().course_pages(body.course_id) if p['document_id']==body.document_id and p['status'] in ('verified','extracted') and p['text'].strip())[:15000]
+        if not source.strip():raise HTTPException(400,'这份资料暂无可提取文字，请等待处理完成或换用文字版 PDF / TXT / MD')
+    id=uuid.uuid4().hex;main().execute('INSERT INTO lite_goals VALUES(?,?,?,?,?)',(id,body.course_id,body.concept,body.target,source));return {'id':id}
 @router.post('/questions')
 def question(body:Practice):
     goal_id=body.goal_id
