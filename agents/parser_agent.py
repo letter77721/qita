@@ -15,12 +15,6 @@ def parse(data, filename):
             pages = []
             for i, page in enumerate(doc):
                 text = page.get_text(sort=True).strip()
-                pages.append({'number':i+1,'text':text,'status':'extracted' if text else 'needs_ocr'})
+                pages.append({'number':i+1,'text':text,'status':'extracted' if text else 'needs_transcription'})
             return pages
-    if suffix in ('.png','.jpg','.jpeg'):
-        from PIL import Image
-        from io import BytesIO
-        with Image.open(BytesIO(data)) as im:
-            im.verify()
-        return [{'number':1,'text':'','status':'needs_ocr'}]
-    raise ValueError('不支持的文件格式')
+    raise ValueError('Lite 仅接收 PDF、TXT、MD；扫描页请手动粘贴教材文字。')

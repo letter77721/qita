@@ -7,6 +7,7 @@ import threading
 import uuid
 import hmac
 import time
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -24,12 +25,13 @@ from agents.parser_agent import parse
 from agents.knowledge_agent import organize
 from agents.conflict_agent import LABELS
 from workflows.graph import run
-from services.ocr_service import configured, recognize, VisionError, settings as vision_settings
+from services.text_model import configuration
 from services.retrieval import search
+from backend.anonymous import ScopedStore,AnonymousMiddleware,visitor,upload_root
 
 load_dotenv(ROOT / '.env')
 data_root = Path(os.environ['NOTEPILOT_DATA_DIR']) if os.getenv('NOTEPILOT_DATA_DIR') else ROOT / 'data'
-store = Store(os.getenv('NOTEPILOT_DB') or data_root / 'notepilot.db')
+store = ScopedStore(Store(os.getenv('NOTEPILOT_DB') or data_root / 'notepilot.db'))
 pool = ThreadPoolExecutor(max_workers=2)
 lock = threading.Lock()
 
@@ -57,6 +59,7 @@ def valid_session(value):
 
 
 def auth(authorization: str = Header(default=''),np_session: str = Cookie(default='')):
+    if visitor.get():return
     token = os.getenv('NOTEPILOT_TOKEN','')
     if token and not hmac.compare_digest(authorization.encode(),('Bearer '+token).encode()) and not valid_session(np_session):
         raise HTTPException(401,'访问口令不正确')
@@ -67,10 +70,13 @@ async def lifespan(app):
     if os.getenv('NOTEPILOT_ENV') == 'production' and not os.getenv('NOTEPILOT_TOKEN'):
         raise RuntimeError('Production requires NOTEPILOT_TOKEN')
     initialize()
+    from backend.lite import initialize as initialize_lite
+    initialize_lite(store)
     yield
 
 
-app = FastAPI(title='NotePilot 2.0',lifespan=lifespan)
+app = FastAPI(title='NotePilot Lite',lifespan=lifespan)
+app.add_middleware(AnonymousMiddleware)
 app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:8081','http://127.0.0.1:8081'],allow_methods=['*'],allow_headers=['*'],allow_credentials=True)
 
 
@@ -127,7 +133,7 @@ def png(p):
     return path.read_bytes(),'image/png' if path.suffix=='.png' else 'image/jpeg'
 
 
-def process(job_id,doc_id,ocr):
+def process(job_id,doc_id):
     try:
         execute("UPDATE jobs SET status='running',stage='读取原始资料' WHERE id=?",(job_id,))
         doc=next(d for d in store.documents() if d['id']==doc_id)
@@ -135,38 +141,25 @@ def process(job_id,doc_id,ocr):
         with store.connect() as c:
             # Retry never overwrites existing human corrections.
             c.executemany('INSERT OR IGNORE INTO pages VALUES(?,?,?,?,?)',[(doc_id,p['number'],p['text'],p['text'],p['status']) for p in parsed])
-        for p in [p for p in store.pages() if p['document_id']==doc_id]:
-            if ocr and configured() and p['status']=='needs_ocr':
-                execute('UPDATE jobs SET stage=? WHERE id=?',(f"视觉识别 · 第 {p['number']} 页",job_id))
-                data,mime=png(p); text=recognize(data,mime)
-                execute("UPDATE pages SET text=?,original=?,status='ocr_unverified' WHERE document_id=? AND number=? AND status='needs_ocr'",(text,text,doc_id,p['number']))
         execute("UPDATE jobs SET stage='知识关联与证据诊断' WHERE id=?",(job_id,))
         run(course_pages(doc['course_id']))
         execute("UPDATE jobs SET status='completed',stage='处理完成' WHERE id=?",(job_id,))
-    except VisionError as e:
-        execute("UPDATE jobs SET status='failed',stage='视觉识别失败',error=? WHERE id=?",(str(e),job_id))
     except Exception:
         execute("UPDATE jobs SET status='failed',stage='处理失败',error='解析或模型调用失败，请检查文件与后端配置后重试。' WHERE id=?",(job_id,))
 
 
-def enqueue(doc_id,ocr):
+def enqueue(doc_id):
     with lock:
         existing=store.rows("SELECT id FROM jobs WHERE document_id=? AND status IN ('queued','running')",(doc_id,))
         if existing: return existing[0]['id']
         id=uuid.uuid4().hex
         execute("INSERT INTO jobs(id,document_id,status,stage) VALUES(?,?,'queued','等待处理')",(id,doc_id))
-        pool.submit(process,id,doc_id,ocr)
+        pool.submit(contextvars.copy_context().run,process,id,doc_id)
         return id
 
 
 @app.get('/api/health')
-def health(): return {'status':'ok','version':'2.0'}
-
-
-@app.get('/api/vision/status',dependencies=[Depends(auth)])
-def vision_status():
-    base,model=vision_settings()
-    return {'configured':configured(),'model':model,'base_url':base,'scope':'图片与扫描页转录；知识诊断和追问仍使用现有规则'}
+def health(): return {'status':'ok','version':'lite-1.0'}
 
 
 class Course(BaseModel):
@@ -219,19 +212,23 @@ def workspace(course_id:str='fluid'):
             'concepts':sorted({c['concept'] for c in state['chunks']}),'tasks':schedule(course,state['chunks'],issues),
             'jobs':jobs,
             'attempt_count':len(store.rows('SELECT id FROM practice WHERE course_id=?',(course_id,))),
-            'vision_configured':configured(),'engine':state['engine']}
+            'text_model':configuration(),'engine':state['engine']}
 
 
 @app.post('/api/documents',dependencies=[Depends(auth)],status_code=202)
-async def upload(file:UploadFile=File(...),course_id:str=Form('fluid'),kind:str=Form('课堂笔记'),allow_ocr:bool=Form(False)):
+async def upload(file:UploadFile=File(...),course_id:str=Form('fluid'),kind:str=Form('课堂笔记')):
     if not store.rows('SELECT id FROM courses WHERE id=?',(course_id,)): raise HTTPException(404,'课程不存在')
     name=Path((file.filename or '资料').replace('\\','/')).name
     suffix=Path(name).suffix.lower()
-    if suffix not in ('.pdf','.txt','.md','.png','.jpg','.jpeg'): raise HTTPException(400,'仅支持 PDF、图片和文本')
+    if suffix not in ('.pdf','.txt','.md'): raise HTTPException(400,'仅支持可提取文字的 PDF、TXT、MD')
     data=await file.read(20*1024*1024+1)
     if not data or len(data)>20*1024*1024: raise HTTPException(400,'文件为空或超过 20 MB')
+    if visitor.get():
+        docs=store.documents()
+        size=sum(Path(d['path']).stat().st_size for d in docs if Path(d['path']).exists())
+        if len(docs)>=20 or size+len(data)>40*1024*1024:raise HTTPException(413,'当前匿名空间最多20份资料、总计40 MB，请先导出或删除旧资料。')
     id=hashlib.sha256(course_id.encode()+data).hexdigest()
-    folder=(Path(os.environ['NOTEPILOT_DATA_DIR']) if os.getenv('NOTEPILOT_DATA_DIR') else ROOT/'data')/'uploads'
+    folder=upload_root() if visitor.get() else (Path(os.environ['NOTEPILOT_DATA_DIR']) if os.getenv('NOTEPILOT_DATA_DIR') else ROOT/'data')/'uploads'
     folder.mkdir(parents=True,exist_ok=True)
     path=folder/(id+suffix)
     with lock:
@@ -239,11 +236,7 @@ async def upload(file:UploadFile=File(...),course_id:str=Form('fluid'),kind:str=
             path.write_bytes(data)
             store.add(id,name,kind,path,[])
             execute('UPDATE documents SET course_id=? WHERE id=?',(course_id,id))
-    return {'document_id':id,'job_id':enqueue(id,allow_ocr)}
-
-
-class Retry(BaseModel):
-    allow_ocr:bool=False
+    return {'document_id':id,'job_id':enqueue(id)}
 
 
 class MergeCourse(BaseModel):
@@ -265,9 +258,9 @@ def merge_course(id:str,body:MergeCourse):
 
 
 @app.post('/api/documents/{id}/process',dependencies=[Depends(auth)])
-def retry(id:str,body:Retry):
+def retry(id:str):
     if not store.rows('SELECT id FROM documents WHERE id=?',(id,)): raise HTTPException(404,'资料不存在')
-    return {'job_id':enqueue(id,body.allow_ocr)}
+    return {'job_id':enqueue(id)}
 
 
 @app.get('/api/documents/{id}/pages/{number}',dependencies=[Depends(auth)])
@@ -343,7 +336,7 @@ def feedback(body:Feedback):
 
 @app.get('/api/export',dependencies=[Depends(auth)])
 def export():
-    return {table:store.rows('SELECT * FROM '+table) for table in ('courses','documents','pages','reviews','practice','attempts','jobs')}
+    return {table:store.rows('SELECT * FROM '+table) for table in ('courses','documents','pages','reviews','practice','attempts','jobs','lite_goals','lite_questions','lite_answers','lite_mistakes')}
 
 
 @app.delete('/api/documents/{id}',dependencies=[Depends(auth)])
@@ -357,13 +350,16 @@ def delete_document(id:str):
             c.execute('DELETE FROM reviews')
         # Only delete canonical files from the managed upload directory.
         path=Path(records[0]['path']).resolve()
-        root=((Path(os.environ['NOTEPILOT_DATA_DIR']) if os.getenv('NOTEPILOT_DATA_DIR') else ROOT/'data')/'uploads').resolve()
+        root=(upload_root() if visitor.get() else (Path(os.environ['NOTEPILOT_DATA_DIR']) if os.getenv('NOTEPILOT_DATA_DIR') else ROOT/'data')/'uploads').resolve()
         if path.parent==root: path.unlink(missing_ok=True)
     return {'ok':True}
 
 
 from backend.demo import router as demo_router
 app.include_router(demo_router)
+
+from backend.lite import router as lite_router
+app.include_router(lite_router,dependencies=[Depends(auth)])
 
 web=ROOT/'mobile/dist'
 if web.exists(): app.mount('/',StaticFiles(directory=web,html=True),name='mobile-web')

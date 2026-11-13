@@ -8,4 +8,4 @@ def test_pdf_keeps_pages_and_detects_scanned_pages():
         pages=parse(doc.tobytes(),'slides.pdf')
     assert [p['number'] for p in pages]==[1,2]
     assert 'Reynolds' in pages[0]['text']
-    assert pages[1]['status']=='needs_ocr'
+    assert pages[1]['status']=='needs_transcription'

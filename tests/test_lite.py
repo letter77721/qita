@@ -1,0 +1,57 @@
+import json
+import pytest
+from fastapi.testclient import TestClient
+from backend import main as api
+from backend.lite import schedule
+from database.storage import Store
+from services import text_model as llm
+
+@pytest.fixture
+def client(tmp_path,monkeypatch):
+    s=Store(tmp_path/'db');s.add('old','old.txt','课堂笔记','old.txt',[{'number':1,'text':'old data','status':'verified'}])
+    monkeypatch.setattr(api,'store',s);monkeypatch.delenv('NOTEPILOT_TOKEN',raising=False)
+    with TestClient(api.app) as c:yield c
+
+def test_lite_closed_loop_and_retains_old_data(client,monkeypatch):
+    def fake(schema,task,context):
+        if schema is llm.Question:return llm.Question(question='条件是什么？',hint='考虑黏性',reference='无黏',evidence='无黏',needs_verification=False)
+        return llm.Evaluation(verdict='incorrect',error_type='condition',explanation='遗漏条件',follow_up='损失如何处理？',evidence='无黏',needs_verification=False)
+    monkeypatch.setattr(llm,'generate',fake)
+    g=client.post('/api/lite/goals',json={'concept':'伯努利','target':'理解条件','source':'无黏','course_id':'fluid'}).json()['id']
+    q=client.post('/api/lite/questions',json={'goal_id':g}).json()
+    assert 'reference' not in q
+    a=client.post('/api/lite/questions/'+q['id']+'/answer',json={'answer':'不知道'}).json()
+    assert a['evaluation']['verdict']=='incorrect'
+    again=client.post('/api/lite/questions/'+q['id']+'/answer',json={'answer':'重复'}).json()
+    assert again['id']==a['id']
+    mid=client.post('/api/lite/answers/'+a['id']+'/mistake').json()['id']
+    assert client.post('/api/lite/answers/'+a['id']+'/follow-up').status_code==200
+    d=client.get('/api/lite/dashboard').json()
+    assert d['attempt_count']==1 and len(d['mistakes'])==1 and d['tasks'][0]['interval_days']==0
+    assert api.store.pages()[0]['text']=='old data'
+    assert client.put('/api/lite/mistakes/'+mid,json={'concept':'伯努利','question':'条件','answer':'无黏','source':'无黏'}).status_code==200
+    assert client.post('/api/lite/mistakes/'+mid+'/analyze').status_code==200
+    assert client.delete('/api/lite/mistakes/'+mid).status_code==200
+    assert not client.get('/api/lite/dashboard').json()['mistakes']
+
+def test_auth_protects_all_lite_routes(client,monkeypatch):
+    monkeypatch.setenv('NOTEPILOT_TOKEN','secret')
+    assert client.get('/api/lite/dashboard').status_code==401
+    assert client.post('/api/lite/goals',json={'concept':'x','target':'y'}).status_code==401
+
+def test_rule_requires_history_and_uncertainty_cannot_advance():
+    g={'id':'g'}
+    def history(n,uncertain=False):return [{'created':'2026-11-13 00:00:00','evaluation':json.dumps({'verdict':'correct','needs_verification':uncertain})} for _ in range(n)]
+    assert schedule(g,history(1))['interval_days']==1
+    assert schedule(g,history(3))['interval_days']==3
+    assert schedule(g,history(5,True))['interval_days']==0
+
+def test_structured_evidence_guard(monkeypatch):
+    from io import BytesIO
+    monkeypatch.setenv('TEXT_API_KEY','fake')
+    payload={'verdict':'correct','error_type':'none','explanation':'正确','follow_up':'继续？','evidence':'编造原文','needs_verification':False}
+    monkeypatch.setattr(llm.urllib.request,'urlopen',lambda *a,**k:BytesIO(json.dumps({'choices':[{'message':{'content':json.dumps(payload)}}]}).encode()))
+    result=llm.generate(llm.Evaluation,'test',{'source':'真实原文'})
+    assert result.verdict=='uncertain' and result.needs_verification
+    payload['unexpected']='extra'
+    with pytest.raises(llm.ModelError):llm.generate(llm.Evaluation,'test',{'source':'真实原文'})

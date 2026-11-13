@@ -1,6 +1,6 @@
 {
-  "name": "notepilot-mobile",
-  "version": "2.0.0",
+  "name": "notepilot-lite",
+  "version": "3.0.0",
   "private": true,
   "main": "index.js",
   "scripts": {
@@ -14,9 +14,7 @@
     "@expo/metro-runtime": "~6.1.0",
     "@expo/vector-icons": "^15.0.0",
     "expo": "~54.0.0",
-    "expo-camera": "~17.0.0",
     "expo-document-picker": "~14.0.0",
-    "expo-image-manipulator": "~14.0.0",
     "expo-status-bar": "~3.0.0",
     "katex": "0.16.22",
     "react": "19.1.0",

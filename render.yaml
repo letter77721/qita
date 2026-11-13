@@ -15,7 +15,7 @@ services:
         value: /app/data
       - key: NOTEPILOT_TOKEN
         generateValue: true
-      - key: VISION_BASE_URL
+      - key: TEXT_BASE_URL
         value: https://open.bigmodel.cn/api/paas/v4
-      - key: VISION_MODEL
-        value: glm-4.6v-flash
+      - key: TEXT_MODEL
+        value: glm-4.7-flash

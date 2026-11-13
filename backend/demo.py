@@ -27,7 +27,7 @@ def workspace():
         {'id':p['document_id'],'name':p['name'],'kind':p['kind'],'course_id':'fluid','page_count':1} for p in PAGES],
         'issues':issues,'concepts':concepts,'tasks':[{'concept':c,'score':None,'count':0,'due':today,
         'priority':3 if c=='伯努利方程' else 1,'reason':'示例条件待核实' if c=='伯努利方程' else '示例主动回忆'} for c in concepts],
-        'jobs':[],'attempt_count':0,'vision_configured':False,'engine':'公开样例 · 实时规则诊断','demo':True}
+        'jobs':[],'attempt_count':0,'engine':'公开样例 · 实时规则诊断','demo':True}
 
 
 @router.get('/documents/{id}/pages/{number}')
