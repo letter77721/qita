@@ -19,7 +19,7 @@ function Lite(){
  useEffect(()=>{setData(null);setQuestion(null);setFeedback(null);setExam('');act(refresh)},[course,host]);
  function clear(){setConcept('');setTarget('');setSource('');setAnswer('');setEditId('')}
  function requireLogin(fn){act(fn)}
- async function start(goal){const q=await api('/lite/questions',{goal_id:goal});setQuestion(q);setAnswer('');setFeedback(null);setHint(false);setTab('AI练习')}
+ async function start(goal){const q=await api('/lite/questions',{goal_id:goal,course_id:course});setQuestion(q);setAnswer('');setFeedback(null);setHint(false);setTab('AI练习')}
  async function documents(){const picked=await DocumentPicker.getDocumentAsync({type:['application/pdf','text/plain','text/markdown'],copyToCacheDirectory:true});if(picked.canceled)return;const a=picked.assets[0],f=new FormData();if(Platform.OS==='web')f.append('file',a.file||await(await fetch(a.uri)).blob(),a.name);else f.append('file',{uri:a.uri,name:a.name,type:a.mimeType});f.append('course_id',course);f.append('kind','课程课件');const u=await api('/documents',f);setNote('资料已上传，等待文字提取…');for(let n=0;n<60;n++){await new Promise(r=>setTimeout(r,1000));const w=await api('/workspace?course_id='+course);const j=w.jobs.find(x=>x.id===u.job_id);if(j?.status==='failed')throw Error(j.error);if(j?.status==='completed'){setNote('文字提取完成；扫描页需要手动输入文字。');await refresh();return}}setNote('仍在处理，稍后点击刷新资料。')}
  const tasks=data?.tasks||[];
  return <SafeAreaView style={s.safe}><View style={s.shell}><View style={s.top}><Text style={s.brand}>NotePilot Lite ·</Text><Text style={s.muted}>免登录学习空间</Text></View>

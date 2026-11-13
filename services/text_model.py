@@ -19,7 +19,8 @@ class Evaluation(BaseModel):
     evidence:str=Field(max_length=3000)
     needs_verification:bool
 
-class ModelError(ValueError):pass
+class ModelError(ValueError):
+    def __init__(self,message,status=502):super().__init__(message);self.status=status
 _slot=threading.Semaphore(1)
 def configuration():
     return {'model':os.getenv('TEXT_MODEL') or 'glm-4.7-flash',
@@ -33,14 +34,23 @@ def generate(schema,task,context):
     payload={'model':configuration()['model'],'messages':[{'role':'system','content':prompt},{'role':'user','content':json.dumps({'task':task,**context},ensure_ascii=False)}],
              'thinking':{'type':'disabled'},'temperature':.3,'max_tokens':4096,'response_format':{'type':'json_object'}}
     req=urllib.request.Request(base.rstrip('/')+'/chat/completions',data=json.dumps(payload).encode(),headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
+    if not _slot.acquire(timeout=2):raise ModelError('模型正在处理其他请求，请稍后重试',429)
     try:
-        with _slot,urllib.request.urlopen(req,timeout=120) as response:d=json.load(response)
+        with urllib.request.urlopen(req,timeout=45) as response:d=json.load(response)
         choice=d['choices'][0]
         if choice.get('finish_reason')=='length':raise ModelError('模型输出被截断，请缩短资料后重试')
         result=schema.model_validate_json(choice['message']['content'])
     except ModelError:raise
-    except urllib.error.HTTPError as e:raise ModelError('模型请求失败，状态码 '+str(e.code)+'；请检查权限、密钥或限流') from None
+    except urllib.error.HTTPError as e:
+        code=''
+        try:
+            raw=str(json.load(e).get('error',{}).get('code',''))
+            if raw.isalnum() and len(raw)<24:code='（服务代码 '+raw+'）'
+        except Exception:pass
+        if e.code==429:raise ModelError('智谱免费模型当前限流'+code+'，请稍后再试；本次未计入学习记录',429) from None
+        raise ModelError('模型请求失败，状态码 '+str(e.code)+'；请检查权限或密钥') from None
     except Exception:raise ModelError('模型未返回有效结构化结果或请求超时，请重试') from None
+    finally:_slot.release()
     source=context.get('source','')
     if not source.strip() or not result.evidence.strip() or result.evidence not in source:
         result.needs_verification=True

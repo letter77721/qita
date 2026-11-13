@@ -35,7 +35,9 @@ class Goal(BaseModel):
     concept:str=Field(min_length=1,max_length=100)
     target:str=Field(min_length=1,max_length=1000)
     source:str=Field(default='',max_length=15000)
-class Practice(BaseModel):goal_id:str=''
+class Practice(BaseModel):
+    goal_id:str=''
+    course_id:str='fluid'
 class Answer(BaseModel):answer:str=Field(min_length=1,max_length=5000)
 class Mistake(BaseModel):
     course_id:str='fluid'
@@ -49,7 +51,7 @@ def row(table,id):
     return rows[0]
 def model(schema,task,context):
     try:return llm.generate(schema,task,context).model_dump()
-    except llm.ModelError as e:raise HTTPException(502,str(e))
+    except llm.ModelError as e:raise HTTPException(e.status,str(e))
 @router.post('/model-check')
 def model_check():
     source='合成验收资料：经典伯努利方程沿同一流线使用时，假设稳态、不可压、无黏流动。'
@@ -76,7 +78,7 @@ def add_goal(body:Goal):
 def question(body:Practice):
     goal_id=body.goal_id
     if not goal_id:
-        tasks=dashboard()['tasks']
+        tasks=dashboard(body.course_id)['tasks']
         if not tasks:raise HTTPException(400,'先创建学习目标')
         goal_id=tasks[0]['id']
     g=row('lite_goals',goal_id);history=main().store.rows('SELECT evaluation FROM lite_answers WHERE goal_id=? ORDER BY created DESC LIMIT 5',(g['id'],))
