@@ -84,3 +84,32 @@ def test_goal_without_material_reuses_current_course_text(client,monkeypatch):
         return llm.Question(question='问题？',hint='提示',reference='old data',evidence='old data',needs_verification=False)
     monkeypatch.setattr(llm,'generate',fake)
     assert client.post('/api/lite/questions',json={'goal_id':g}).status_code==200
+
+def test_choice_and_short_answer_round_trip(client,monkeypatch):
+    def fake(schema,task,context):
+        if schema is llm.Question:
+            kind=context.get('question_type','short_answer')
+            return llm.Question(question='条件是什么？',hint='考虑黏性',reference='A. 无黏',evidence='无黏',needs_verification=False,question_type=kind,options=['无黏','强黏性','必须有泵','必须有涡'] if kind=='single_choice' else [])
+        assert context['options']==['无黏','强黏性','必须有泵','必须有涡']
+        assert context['answer']=='A. 无黏'
+        return llm.Evaluation(verdict='correct',error_type='none',explanation='回答正确',follow_up='为什么？',evidence='无黏',needs_verification=False)
+    monkeypatch.setattr(llm,'generate',fake)
+    g=client.post('/api/lite/goals',json={'concept':'伯努利','target':'理解','source':'无黏'}).json()['id']
+    q=client.post('/api/lite/questions',json={'goal_id':g}).json()
+    assert q['question_type']=='single_choice' and len(q['options'])==4 and 'reference' not in q
+    assert client.post('/api/lite/questions/'+q['id']+'/answer',json={'answer':'Z. 伪造选项'}).status_code==400
+    assert client.get('/api/lite/dashboard').json()['attempt_count']==0
+    a=client.post('/api/lite/questions/'+q['id']+'/answer',json={'answer':'A. 无黏'}).json()
+    assert a['evaluation']['verdict']=='correct'
+    mid=client.post('/api/lite/answers/'+a['id']+'/mistake').json()['id']
+    mistake=next(m for m in client.get('/api/lite/dashboard').json()['mistakes'] if m['id']==mid)
+    assert 'A. 无黏' in mistake['question'] and 'D. 必须有涡' in mistake['question']
+    next_q=client.post('/api/lite/questions',json={'goal_id':g}).json()
+    assert next_q['question_type']=='short_answer' and next_q['options']==[]
+
+@pytest.mark.parametrize('kind,options',[
+    ('single_choice',['A','A','B','C']),('single_choice',['A','B']),
+    ('single_choice',['A','B','C',' ']),('short_answer',['A','B','C','D'])])
+def test_question_rejects_invalid_options(kind,options):
+    with pytest.raises(ValueError):
+        llm.Question(question='问题',hint='提示',reference='答案',evidence='',needs_verification=True,question_type=kind,options=options)

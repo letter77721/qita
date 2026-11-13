@@ -91,7 +91,9 @@ def question(body:Practice):
     g=row('lite_goals',goal_id);history=main().store.rows('SELECT evaluation FROM lite_answers WHERE goal_id=? ORDER BY created DESC LIMIT 5',(g['id'],))
     # Include existing textual PDF/notes when no material was pasted into the goal.
     source=g['source'] or '\n'.join(p['text'] for p in main().course_pages(g['course_id']) if p['status'] in ('verified','extracted'))[:15000]
-    result=model(llm.Question,'Tutor：根据目标和近期错误生成一个主动回忆或应用题，给出一个提示与参考答案。',{'concept':g['concept'],'target':g['target'],'history':history,'source':source})
+    count=main().store.rows('SELECT COUNT(*) AS n FROM lite_questions WHERE goal_id=?',(g['id'],))[0]['n']
+    question_type='single_choice' if count%2==0 else 'short_answer'
+    result=model(llm.Question,'Tutor：根据目标和近期错误生成一个主动回忆或应用题，给出一个提示与参考答案。',{'concept':g['concept'],'target':g['target'],'history':history,'source':source,'question_type':question_type})
     trace=[{'agent':'Planner','decision':'用户选择知识点；按到期时间推荐任务'},{'agent':'Tutor','model':llm.configuration()['model'],'status':'validated_json'}]
     id=uuid.uuid4().hex
     # Snapshot evidence to keep grading stable if a goal later changes.
@@ -101,7 +103,7 @@ def question(body:Practice):
 @router.post('/answers/{id}/follow-up')
 def follow_up(id:str):
     a=row('lite_answers',id);q=row('lite_questions',a['question_id']);payload=json.loads(q['payload']);evaluation=json.loads(a['evaluation'])
-    result=model(llm.Question,'Tutor：围绕该错因生成一个更有针对性的追问与提示，不重复原题。',{'previous_question':payload['question'],'previous_answer':a['answer'],'feedback':evaluation,'source':payload['source']})
+    result=model(llm.Question,'Tutor：围绕该错因生成一个更有针对性的简答追问与提示，不重复原题。',{'previous_question':payload['question'],'previous_answer':a['answer'],'feedback':evaluation,'source':payload['source'],'question_type':'short_answer'})
     qid=uuid.uuid4().hex;trace=[{'agent':'Planner','decision':'依据上一次错因追问'},{'agent':'Tutor','model':llm.configuration()['model'],'status':'validated_json'}]
     main().execute('INSERT INTO lite_questions(id,goal_id,payload,trace) VALUES(?,?,?,?)',(qid,q['goal_id'],json.dumps({**result,'source':payload['source']},ensure_ascii=False),json.dumps(trace)))
     return {'id':qid,**{k:v for k,v in result.items() if k!='reference'},'trace':trace}
@@ -110,7 +112,10 @@ def answer(id:str,body:Answer):
     q=row('lite_questions',id);existing=main().store.rows('SELECT * FROM lite_answers WHERE question_id=?',(id,))
     if existing:return {'id':existing[0]['id'],'evaluation':json.loads(existing[0]['evaluation']),'trace':json.loads(existing[0]['trace'])}
     payload=json.loads(q['payload'])
-    result=model(llm.Evaluation,'Evaluator：核对回答，解释错因并给出一个有针对性的追问。资料不足时标记 uncertain。',{'question':payload['question'],'reference':payload['reference'],'answer':body.answer,'source':payload['source']})
+    if payload.get('question_type')=='single_choice':
+        allowed=[chr(65+i)+'. '+o for i,o in enumerate(payload['options'])]
+        if body.answer not in allowed:raise HTTPException(400,'请选择题目提供的一个选项')
+    result=model(llm.Evaluation,'Evaluator：核对回答，解释错因并给出一个有针对性的追问。资料不足时标记 uncertain。',{'question':payload['question'],'options':payload.get('options',[]),'reference':payload['reference'],'answer':body.answer,'source':payload['source']})
     trace=json.loads(q['trace'])+[{'agent':'Evaluator','model':llm.configuration()['model'],'status':'validated_json'},{'agent':'Scheduler','rule':'最近5次；不确定不计正确率；连续正确3次才延长间隔'}]
     aid=uuid.uuid4().hex
     with main().store.connect() as c:
@@ -121,7 +126,8 @@ def answer(id:str,body:Answer):
 def save_answer(id:str):
     a=row('lite_answers',id);q=row('lite_questions',a['question_id']);g=row('lite_goals',q['goal_id']);p=json.loads(q['payload'])
     mid='answer-'+id
-    main().execute('INSERT OR IGNORE INTO lite_mistakes(id,course_id,concept,question,answer,source,analysis) VALUES(?,?,?,?,?,?,?)',(mid,g['course_id'],g['concept'],p['question'],a['answer'],p['source'],a['evaluation']))
+    text=p['question']+'\n'+'\n'.join(chr(65+i)+'. '+o for i,o in enumerate(p['options'])) if p.get('options') else p['question']
+    main().execute('INSERT OR IGNORE INTO lite_mistakes(id,course_id,concept,question,answer,source,analysis) VALUES(?,?,?,?,?,?,?)',(mid,g['course_id'],g['concept'],text,a['answer'],p['source'],a['evaluation']))
     return {'id':mid}
 @router.post('/mistakes')
 def add_mistake(body:Mistake):
