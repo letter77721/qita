@@ -166,3 +166,18 @@ def test_course_rename_and_delete_preserves_learning(client):
     assert any(x['id']==g for x in d['tasks']) and any(x['id']==m for x in d['mistakes'])
     assert not any(x['id']==c for x in client.get('/api/courses').json())
     assert client.post('/api/courses/fluid/merge',json={'target_id':'fluid'}).status_code==400
+
+
+def test_summary_persistence_and_course_isolation(client,monkeypatch):
+    def fake(schema,task,context):
+        assert schema is llm.KnowledgeSummary and 'old data' in context['source']
+        return llm.KnowledgeSummary(title='总结',key_points=['核心概念'],formulas=[],pitfalls=['条件'],evidence='old data',needs_verification=False)
+    monkeypatch.setattr(llm,'generate',fake)
+    result=client.post('/api/lite/summaries',json={'course_id':'fluid'})
+    assert result.status_code==200
+    assert client.get('/api/lite/dashboard').json()['summaries'][0]['payload']['key_points']==['核心概念']
+    other=client.post('/api/courses',json={'name':'其他课程'}).json()['id']
+    assert not client.get('/api/lite/dashboard?course_id='+other).json()['summaries']
+    assert client.post('/api/lite/summaries',json={'course_id':other}).status_code==400
+    assert client.post('/api/lite/summaries',json={'course_id':'missing'}).status_code==404
+    assert len(client.get('/api/export').json()['lite_summaries'])==1

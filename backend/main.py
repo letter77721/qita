@@ -257,6 +257,7 @@ def merge_course(id:str,body:MergeCourse):
             raise HTTPException(409,'请等待该课程处理完成再合并')
         c.execute('UPDATE documents SET course_id=? WHERE course_id=?',(body.target_id,id))
         c.execute('UPDATE practice SET course_id=? WHERE course_id=?',(body.target_id,id))
+        c.execute('UPDATE lite_summaries SET course_id=? WHERE course_id=?',(body.target_id,id))
         c.execute('UPDATE lite_goals SET course_id=? WHERE course_id=?',(body.target_id,id))
         c.execute('UPDATE lite_mistakes SET course_id=? WHERE course_id=?',(body.target_id,id))
         c.execute('DELETE FROM courses WHERE id=?',(id,))
@@ -348,7 +349,7 @@ def feedback(body:Feedback):
 
 @app.get('/api/export',dependencies=[Depends(auth)])
 def export():
-    return {table:store.rows('SELECT * FROM '+table) for table in ('courses','documents','pages','reviews','practice','attempts','jobs','lite_goals','lite_questions','lite_answers','lite_mistakes')}
+    return {table:store.rows('SELECT * FROM '+table) for table in ('courses','documents','pages','reviews','practice','attempts','jobs','lite_goals','lite_questions','lite_answers','lite_mistakes','lite_summaries')}
 
 
 @app.delete('/api/documents/{id}',dependencies=[Depends(auth)])

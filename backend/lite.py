@@ -10,6 +10,7 @@ def main():
     return main
 def initialize(store):
     with store.connect() as c:c.executescript('''
+    CREATE TABLE IF NOT EXISTS lite_summaries(id TEXT PRIMARY KEY,course_id TEXT,payload TEXT,created TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS lite_goals(id TEXT PRIMARY KEY,course_id TEXT,concept TEXT,target TEXT,source TEXT);
     CREATE TABLE IF NOT EXISTS lite_questions(id TEXT PRIMARY KEY,goal_id TEXT,payload TEXT,trace TEXT,created TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS lite_answers(id TEXT PRIMARY KEY,question_id TEXT UNIQUE,goal_id TEXT,answer TEXT,evaluation TEXT,trace TEXT,created TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -74,7 +75,7 @@ def dashboard(course_id:str='fluid'):
         d.update(jobs[0] if jobs else {'status':'completed','error':None})
     return {'courses':s.rows('SELECT * FROM courses'),'course':course,'tasks':tasks,'history':[{**a,'evaluation':json.loads(a['evaluation']),'trace':json.loads(a['trace'])} for a in answers[-30:][::-1]],
             'mistakes':s.rows('SELECT * FROM lite_mistakes WHERE course_id=? ORDER BY created DESC',(course_id,)),
-            'model':llm.configuration(),'attempt_count':len(answers),'documents':documents}
+            'model':llm.configuration(),'attempt_count':len(answers),'documents':documents,'summaries':[{**x,'payload':json.loads(x['payload'])} for x in s.rows('SELECT * FROM lite_summaries WHERE course_id=? ORDER BY created DESC,rowid DESC LIMIT 5',(course_id,))]}
 @router.post('/goals')
 def add_goal(body:Goal):
     if not main().store.rows('SELECT id FROM courses WHERE id=?',(body.course_id,)):raise HTTPException(404,'课程不存在')
@@ -147,3 +148,20 @@ def delete_mistake(id:str):
 def analyze_mistake(id:str):
     m=row('lite_mistakes',id);result=model(llm.Evaluation,'分析用户手动录入错题的错因与不确定性。',{'question':m['question'],'answer':m['answer'],'source':m['source']})
     main().execute('UPDATE lite_mistakes SET analysis=? WHERE id=?',(json.dumps(result,ensure_ascii=False),id));return result
+
+class SummaryRequest(BaseModel):
+    course_id:str='fluid'
+
+@router.post('/summaries')
+def summarize(body:SummaryRequest):
+    courses=main().store.rows('SELECT * FROM courses WHERE id=?',(body.course_id,))
+    if not courses:raise HTTPException(404,'课程不存在')
+    goals=main().store.rows('SELECT concept,target,source FROM lite_goals WHERE course_id=?',(body.course_id,))
+    texts=[p['text'] for p in main().course_pages(body.course_id) if p['status'] in ('verified','extracted') and p['text'].strip()]
+    texts += [g['source'] for g in goals if g['source']]
+    if not texts and not goals:raise HTTPException(400,'请先上传课程资料或创建学习目标，再总结知识点')
+    source='\n'.join(texts)[:15000]
+    result=model(llm.KnowledgeSummary,'总结本课程的核心知识点、重要公式及适用条件、常见易错点。优先依据资料；无教材时围绕学习目标提供通用总结。不要出题或反问。每项简明清楚，公式用 LaTeX。',{'course':courses[0]['name'],'goals':[{'concept':g['concept'],'target':g['target']} for g in goals],'source':source})
+    id=uuid.uuid4().hex
+    main().execute('INSERT INTO lite_summaries(id,course_id,payload) VALUES(?,?,?)',(id,body.course_id,json.dumps(result,ensure_ascii=False)))
+    return {'id':id,'payload':result}

@@ -43,7 +43,7 @@ class AnonymousMiddleware(BaseHTTPMiddleware):
             return JSONResponse({'detail':'接口不存在'},status_code=404)
         ip=hashlib.sha256((request.client.host if request.client else 'unknown').encode()).hexdigest()
         now=time.monotonic()
-        model=request.method=='POST' and (rest.startswith('/lite/questions') or rest.endswith('/follow-up') or rest.endswith('/analyze'))
+        model=request.method=='POST' and (rest.startswith('/lite/questions') or rest.endswith('/follow-up') or rest.endswith('/analyze') or rest=='/lite/summaries')
         with _lock:
             for q,seconds in ((_requests[ip],60),(_model_calls[ip],3600),(_global_calls,86400)):
                 while q and q[0]<now-seconds:q.popleft()
