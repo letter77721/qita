@@ -14,7 +14,7 @@ def client(tmp_path,monkeypatch):
 
 def test_lite_closed_loop_and_retains_old_data(client,monkeypatch):
     def fake(schema,task,context):
-        if schema is llm.Question:return llm.Question(question='条件是什么？',hint='考虑黏性',reference='无黏',evidence='无黏',needs_verification=False)
+        if schema is llm.Question:return llm.Question(question='损失如何处理？' if context.get('previous_question') else '条件是什么？',hint='考虑黏性',reference='无黏',evidence='无黏',needs_verification=False)
         return llm.Evaluation(verdict='incorrect',error_type='condition',explanation='遗漏条件',follow_up='损失如何处理？',evidence='无黏',needs_verification=False)
     monkeypatch.setattr(llm,'generate',fake)
     g=client.post('/api/lite/goals',json={'concept':'伯努利','target':'理解条件','source':'无黏','course_id':'fluid'}).json()['id']
@@ -89,7 +89,7 @@ def test_choice_and_short_answer_round_trip(client,monkeypatch):
     def fake(schema,task,context):
         if schema is llm.Question:
             kind=context.get('question_type','short_answer')
-            return llm.Question(question='条件是什么？',hint='考虑黏性',reference='A. 无黏',evidence='无黏',needs_verification=False,question_type=kind,options=['无黏','强黏性','必须有泵','必须有涡'] if kind=='single_choice' else [])
+            return llm.Question(question='解释适用边界' if kind=='short_answer' else '条件是什么？',hint='考虑黏性',reference='A. 无黏',evidence='无黏',needs_verification=False,question_type=kind,options=['无黏','强黏性','必须有泵','必须有涡'] if kind=='single_choice' else [])
         assert context['options']==['无黏','强黏性','必须有泵','必须有涡']
         assert context['answer']=='A. 无黏'
         return llm.Evaluation(verdict='correct',error_type='none',explanation='回答正确',follow_up='为什么？',evidence='无黏',needs_verification=False)
@@ -181,3 +181,21 @@ def test_summary_persistence_and_course_isolation(client,monkeypatch):
     assert client.post('/api/lite/summaries',json={'course_id':other}).status_code==400
     assert client.post('/api/lite/summaries',json={'course_id':'missing'}).status_code==404
     assert len(client.get('/api/export').json()['lite_summaries'])==1
+
+
+def test_repeat_question_retried_and_not_stored(client,monkeypatch):
+    calls=[]
+    def fake(schema,task,context):
+        calls.append(dict(context))
+        text='条件是什么？' if len(calls)<=2 else '请比较两种流动的能量损失'
+        return llm.Question(question=text,hint='提示',reference='答案',evidence='',needs_verification=True)
+    monkeypatch.setattr(llm,'generate',fake)
+    g=client.post('/api/lite/goals',json={'concept':'伯努利','target':'理解'}).json()['id']
+    first=client.post('/api/lite/questions',json={'goal_id':g}).json()
+    second=client.post('/api/lite/questions',json={'goal_id':g}).json()
+    assert first['question']!=second['question'] and len(calls)==3
+    assert first['question'] in calls[1]['recent_questions']
+    assert len(api.store.rows('SELECT * FROM lite_questions'))==2
+    monkeypatch.setattr(llm,'generate',lambda *args:llm.Question(question=first['question'],hint='提示',reference='答案',evidence='',needs_verification=True))
+    assert client.post('/api/lite/questions',json={'goal_id':g}).status_code==409
+    assert len(api.store.rows('SELECT * FROM lite_questions'))==2

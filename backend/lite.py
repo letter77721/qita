@@ -1,4 +1,5 @@
-import json,uuid
+import json,uuid,re,unicodedata
+from difflib import SequenceMatcher
 from datetime import datetime,timedelta,timezone
 from fastapi import APIRouter,HTTPException,Depends
 from pydantic import BaseModel,Field
@@ -86,6 +87,19 @@ def add_goal(body:Goal):
         source='\n'.join(p['text'] for p in main().course_pages(body.course_id) if p['document_id']==body.document_id and p['status'] in ('verified','extracted') and p['text'].strip())[:15000]
         if not source.strip():raise HTTPException(400,'这份资料暂无可提取文字，请等待处理完成或换用文字版 PDF / TXT / MD')
     id=uuid.uuid4().hex;main().execute('INSERT INTO lite_goals VALUES(?,?,?,?,?)',(id,body.course_id,body.concept,body.target,source));return {'id':id}
+def fresh_question(context):
+    recent=main().store.rows('SELECT payload FROM lite_questions WHERE goal_id=? ORDER BY created DESC,rowid DESC LIMIT 20',(context.pop('_goal_id'),))
+    seen=[json.loads(r['payload'])['question'] for r in recent]
+    context['recent_questions']=seen
+    def normalize(text):return re.sub(r'[^\w]','',unicodedata.normalize('NFKC',text).lower())
+    for attempt in range(2):
+        result=model(llm.Question,'Tutor：生成一道新的练习题及提示与参考答案。必须避开 recent_questions 已考过的问题，不能仅改写题干、交换选项或更换题型。依照 focus 改变考查角度，如条件、反例、比较、情境应用；资料不足以支持新题时不要编造事实。',context)
+        key=normalize(result['question'])
+        if not any(key==normalize(q) or SequenceMatcher(None,key,normalize(q)).ratio()>.92 for q in seen):return result
+        context['recent_questions']=[result['question']]+seen
+        context['retry_instruction']='上一题重复，请换一个尚未考查的知识角度。'
+    raise HTTPException(409,'模型连续生成了重复题，本次未计入练习。请再试一次，或补充资料、切换知识点。')
+
 @router.post('/questions')
 def question(body:Practice):
     goal_id=body.goal_id
@@ -98,20 +112,21 @@ def question(body:Practice):
     source=g['source'] or '\n'.join(p['text'] for p in main().course_pages(g['course_id']) if p['status'] in ('verified','extracted'))[:15000]
     count=main().store.rows('SELECT COUNT(*) AS n FROM lite_questions WHERE goal_id=?',(g['id'],))[0]['n']
     question_type='single_choice' if count%2==0 else 'short_answer'
-    result=model(llm.Question,'Tutor：根据目标和近期错误生成一个主动回忆或应用题，给出一个提示与参考答案。',{'concept':g['concept'],'target':g['target'],'history':history,'source':source,'question_type':question_type})
+    focus=['基本概念辨析','适用条件与边界','反例与常见误解','实际情境应用','概念或方法比较','综合推理与迁移'][count%6]
+    result=fresh_question({'_goal_id':g['id'],'concept':g['concept'],'target':g['target'],'history':history,'source':source,'question_type':question_type,'focus':focus,'question_number':count+1})
     trace=[{'agent':'Planner','decision':'用户选择知识点；按到期时间推荐任务'},{'agent':'Tutor','model':llm.configuration()['model'],'status':'validated_json'}]
     id=uuid.uuid4().hex
     # Snapshot evidence to keep grading stable if a goal later changes.
     main().execute('INSERT INTO lite_questions(id,goal_id,payload,trace) VALUES(?,?,?,?)',(id,g['id'],json.dumps({**result,'source':source},ensure_ascii=False),json.dumps(trace)))
-    return {'id':id,**{k:v for k,v in result.items() if k!='reference'},'trace':trace}
+    return {'id':id,'goal_id':g['id'],**{k:v for k,v in result.items() if k!='reference'},'trace':trace}
 
 @router.post('/answers/{id}/follow-up')
 def follow_up(id:str):
     a=row('lite_answers',id);q=row('lite_questions',a['question_id']);payload=json.loads(q['payload']);evaluation=json.loads(a['evaluation'])
-    result=model(llm.Question,'Tutor：围绕该错因生成一个更有针对性的简答追问与提示，不重复原题。',{'previous_question':payload['question'],'previous_answer':a['answer'],'feedback':evaluation,'source':payload['source'],'question_type':'short_answer'})
+    result=fresh_question({'_goal_id':q['goal_id'],'previous_question':payload['question'],'previous_answer':a['answer'],'feedback':evaluation,'source':payload['source'],'question_type':'short_answer','focus':'围绕上一次错因的新情境应用'})
     qid=uuid.uuid4().hex;trace=[{'agent':'Planner','decision':'依据上一次错因追问'},{'agent':'Tutor','model':llm.configuration()['model'],'status':'validated_json'}]
     main().execute('INSERT INTO lite_questions(id,goal_id,payload,trace) VALUES(?,?,?,?)',(qid,q['goal_id'],json.dumps({**result,'source':payload['source']},ensure_ascii=False),json.dumps(trace)))
-    return {'id':qid,**{k:v for k,v in result.items() if k!='reference'},'trace':trace}
+    return {'id':qid,'goal_id':q['goal_id'],**{k:v for k,v in result.items() if k!='reference'},'trace':trace}
 @router.post('/questions/{id}/answer')
 def answer(id:str,body:Answer):
     q=row('lite_questions',id);existing=main().store.rows('SELECT * FROM lite_answers WHERE question_id=?',(id,))
