@@ -182,6 +182,25 @@ def test_summary_persistence_and_course_isolation(client,monkeypatch):
     assert client.post('/api/lite/summaries',json={'course_id':'missing'}).status_code==404
     assert len(client.get('/api/export').json()['lite_summaries'])==1
 
+def test_new_ui_overview_history_and_material_cover(client,monkeypatch):
+    def fake(schema,task,context):
+        if schema is llm.Question:return llm.Question(question='本题题干',hint='提示',reference='A. 条件甲',evidence='old data',needs_verification=False,question_type='single_choice',options=['条件甲','条件乙','条件丙','条件丁'])
+        return llm.Evaluation(verdict='correct',error_type='none',explanation='解析',follow_up='追问',evidence='old data',needs_verification=False)
+    monkeypatch.setattr(llm,'generate',fake)
+    g=client.post('/api/lite/goals',json={'concept':'条件','target':'理解'}).json()['id']
+    q=client.post('/api/lite/questions',json={'goal_id':g}).json()
+    client.post('/api/lite/questions/'+q['id']+'/answer',json={'answer':'A. 条件甲'})
+    d=client.get('/api/lite/dashboard').json()
+    assert d['history'][0]['question']=='本题题干' and len(d['history'][0]['options'])==4
+    assert d['documents'][0]['preview']==''
+    overview=client.get('/api/lite/overview').json()['courses'][0]
+    assert overview['goal_count']==1 and overview['attempt_count']==1 and overview['document_count']==1
+    other=client.post('/api/courses',json={'name':'另一课'}).json()['id']
+    c=next(c for c in client.get('/api/lite/overview').json()['courses'] if c['id']==other)
+    assert c['attempt_count']==0 and c['goal_count']==0 and c['document_count']==0
+    monkeypatch.setenv('NOTEPILOT_TOKEN','secret')
+    assert client.get('/api/lite/overview').status_code==401
+
 
 def test_repeat_question_retried_and_not_stored(client,monkeypatch):
     calls=[]

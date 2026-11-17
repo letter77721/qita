@@ -74,9 +74,34 @@ def dashboard(course_id:str='fluid'):
         d['readable_pages']=sum(p['document_id']==d['id'] and bool(p['text'].strip()) and p['status'] in ('verified','extracted') for p in s.pages())
         jobs=s.rows('SELECT status,error FROM jobs WHERE document_id=? ORDER BY created DESC,rowid DESC LIMIT 1',(d['id'],))
         d.update(jobs[0] if jobs else {'status':'completed','error':None})
-    return {'courses':s.rows('SELECT * FROM courses'),'course':course,'tasks':tasks,'history':[{**a,'evaluation':json.loads(a['evaluation']),'trace':json.loads(a['trace'])} for a in answers[-30:][::-1]],
+        d['preview']=main().document_cover(d)
+    def history_item(a):
+        rows=s.rows('SELECT * FROM lite_questions WHERE id=?',(a['question_id'],))
+        payload=json.loads(rows[0]['payload']) if rows else {}
+        return {'id':a['id'],'goal_id':a['goal_id'],'answer':a['answer'],'created':a['created'],
+                'evaluation':json.loads(a['evaluation']),'trace':json.loads(a['trace']),
+                'question':payload.get('question',''),'question_type':payload.get('question_type','short_answer'),'options':payload.get('options',[]),'reference':payload.get('reference','')}
+    return {'courses':s.rows('SELECT * FROM courses'),'course':course,'tasks':tasks,'history':[history_item(a) for a in answers[-30:][::-1]],
             'mistakes':s.rows('SELECT * FROM lite_mistakes WHERE course_id=? ORDER BY created DESC',(course_id,)),
             'model':llm.configuration(),'attempt_count':len(answers),'documents':documents,'summaries':[{**x,'payload':json.loads(x['payload'])} for x in s.rows('SELECT * FROM lite_summaries WHERE course_id=? ORDER BY created DESC,rowid DESC LIMIT 5',(course_id,))]}
+@router.get('/overview')
+def overview():
+    """各课程的学习总览：目标数、今日待复习、练习次数、错题数、资料数。"""
+    s=main().store
+    today=now().date()
+    items=[]
+    for c in s.rows('SELECT * FROM courses ORDER BY rowid'):
+        goals=s.rows('SELECT * FROM lite_goals WHERE course_id=?',(c['id'],))
+        answers=s.rows('SELECT a.* FROM lite_answers a JOIN lite_goals g ON g.id=a.goal_id WHERE g.course_id=? ORDER BY a.created,a.rowid',(c['id'],))
+        tasks=[schedule(g,[a for a in answers if a['goal_id']==g['id']],c['exam_date']) for g in goals]
+        items.append({'id':c['id'],'name':c['name'],'exam_date':c['exam_date'],
+            'goal_count':len(goals),'attempt_count':len(answers),
+            'due_today':sum(1 for t in tasks if datetime.fromisoformat(t['due']).date()<=today),
+            'mistake_count':len(s.rows('SELECT id FROM lite_mistakes WHERE course_id=?',(c['id'],))),
+            'document_count':sum(1 for d in s.documents() if d['course_id']==c['id']),
+            'last_activity':answers[-1]['created'] if answers else None})
+    return {'courses':items}
+
 @router.post('/goals')
 def add_goal(body:Goal):
     if not main().store.rows('SELECT id FROM courses WHERE id=?',(body.course_id,)):raise HTTPException(404,'课程不存在')
@@ -135,7 +160,7 @@ def answer(id:str,body:Answer):
     if payload.get('question_type')=='single_choice':
         allowed=[chr(65+i)+'. '+o for i,o in enumerate(payload['options'])]
         if body.answer not in allowed:raise HTTPException(400,'请选择题目提供的一个选项')
-    result=model(llm.Evaluation,'Evaluator：按本题参考答案与教材核对回答，只判正确 correct 或错误 incorrect，解释原因并给出一个有针对性的追问。教材证据不足单独标记 needs_verification，不改变答题对错。',{'question':payload['question'],'options':payload.get('options',[]),'reference':payload['reference'],'answer':body.answer,'source':payload['source']})
+    result=model(llm.Evaluation,'Evaluator：按本题参考答案与教材核对回答，只判正确 correct 或错误 incorrect，解释原因并给出一个有针对性的追问。教材证据不足单独标记 needs_verification，不改变答题对错。',{'question':payload['question'],'question':payload.get('question',''),'question_type':payload.get('question_type','short_answer'),'options':payload.get('options',[]),'reference':payload['reference'],'answer':body.answer,'source':payload['source']})
     trace=json.loads(q['trace'])+[{'agent':'Evaluator','model':llm.configuration()['model'],'status':'validated_json'},{'agent':'Scheduler','rule':'最近5次；不确定不计正确率；连续正确3次才延长间隔'}]
     aid=uuid.uuid4().hex
     with main().store.connect() as c:

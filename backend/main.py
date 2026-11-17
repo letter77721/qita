@@ -125,11 +125,11 @@ def clean(p):
     return {k:v for k,v in p.items() if k!='path'} if p else None
 
 
-def png(p):
+def png(p,dpi=110):
     import fitz
     path=Path(p['path'])
-    if path.suffix=='.pdf':
-        with fitz.open(path) as doc: return doc[p['number']-1].get_pixmap(dpi=110).tobytes('png'),'image/png'
+    if path.suffix.lower()=='.pdf':
+        with fitz.open(path) as doc: return doc[p['number']-1].get_pixmap(dpi=dpi).tobytes('png'),'image/png'
     return path.read_bytes(),'image/png' if path.suffix=='.png' else 'image/jpeg'
 
 
@@ -269,6 +269,19 @@ def retry(id:str):
     if not store.rows('SELECT id FROM documents WHERE id=?',(id,)): raise HTTPException(404,'资料不存在')
     return {'job_id':enqueue(id)}
 
+
+def document_cover(document):
+    """Small base64 cover image for a document, or '' when unavailable."""
+    pages=[p for p in store.pages() if p['document_id']==document['id']]
+    if not pages:return ''
+    page=min(pages,key=lambda p:p['number'])
+    path=Path(page['path'])
+    if path.suffix.lower() in ('.txt','.md'):return ''
+    try:
+        data,mime=png(page,dpi=54)
+        return f'data:{mime};base64,'+base64.b64encode(data).decode()
+    except Exception:
+        return ''
 
 @app.get('/api/documents/{id}/status',dependencies=[Depends(auth)])
 def document_status(id:str):
